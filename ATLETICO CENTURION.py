@@ -4,8 +4,6 @@ from datetime import datetime
 import os
 import io
 import base64
-import gspread
-from google.oauth2.service_account import Credentials
 
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
@@ -13,7 +11,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 # ==========================================
-# 1. CONFIGURACIÓN DE PÁGINA Y CONEXIÓN GSHEET
+# 1. CONFIGURACIÓN DE PÁGINA
 # ==========================================
 st.set_page_config(
     page_title="Atlético Centurión - Finanzas & Club",
@@ -24,36 +22,34 @@ st.set_page_config(
 if "es_admin" not in st.session_state:
     st.session_state["es_admin"] = False
 
-@st.cache_resource
-def conectar_google_sheets():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    if "private_key" in creds_dict:
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-
-    credentials = Credentials.from_service_account_info(
-        creds_dict,
-        scopes=scopes
-    )
-    client = gspread.authorize(credentials)
-    # Conexión directa mediante el ID único de tu planilla para evitar fallos de nombre
-    sheet = client.open_by_key("14ZW9Nvi_pF77HZqwYPUYOL_YRQZLUghm3k5JqwygeIk")
-    return sheet
+# Archivos CSV locales para persistencia sin errores
+DB_FILES = {
+    "jugadores": "jugadores.csv",
+    "movimientos": "movimientos.csv",
+    "cuotas": "cuotas.csv",
+    "noticias": "noticias.csv",
+    "comentarios": "comentarios.csv",
+    "auspiciadores": "auspiciadores.csv"
+}
 
 def get_dataframe(sheet_name, columns):
-    try:
-        sh = conectar_google_sheets()
-        ws = sh.worksheet(sheet_name)
-        records = ws.get_all_records()
-        df = pd.DataFrame(records)
-        if df.empty:
+    filename = DB_FILES.get(sheet_name, f"{sheet_name}.csv")
+    if os.path.exists(filename):
+        try:
+            df = pd.read_csv(filename)
+            if df.empty:
+                return pd.DataFrame(columns=columns)
+            return df
+        except Exception:
             return pd.DataFrame(columns=columns)
+    else:
+        df = pd.DataFrame(columns=columns)
+        df.to_csv(filename, index=False)
         return df
-    except Exception:
-        return pd.DataFrame(columns=columns)
+
+def save_dataframe(sheet_name, df):
+    filename = DB_FILES.get(sheet_name, f"{sheet_name}.csv")
+    df.to_csv(filename, index=False)
 
 # Estilos CSS Personalizados
 st.markdown("""
@@ -83,29 +79,24 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. FUNCIONES DE BASE DE DATOS (GOOGLE SHEETS)
+# 2. FUNCIONES DE GESTIÓN LOCAL (CSV)
 # ==========================================
 def obtener_auspiciadores():
     df = get_dataframe("auspiciadores", ["id", "nombre", "rubro", "contacto"])
     return df.sort_values(by="nombre", ascending=True) if not df.empty and "nombre" in df.columns else df
 
 def agregar_auspiciador(nombre, rubro, contacto):
-    sh = conectar_google_sheets()
-    ws = sh.worksheet("auspiciadores")
     df = get_dataframe("auspiciadores", ["id", "nombre", "rubro", "contacto"])
-    nuevo_id = 1
-    if not df.empty and "id" in df.columns:
-        ids = pd.to_numeric(df["id"], errors='coerce').dropna()
-        if not ids.empty:
-            nuevo_id = int(ids.max()) + 1
-    ws.append_row([nuevo_id, str(nombre).strip(), str(rubro).strip(), str(contacto).strip()])
+    nuevo_id = int(df["id"].max()) + 1 if not df.empty and "id" in df.columns and not df["id"].dropna().empty else 1
+    nuevo_reg = pd.DataFrame([[nuevo_id, str(nombre).strip(), str(rubro).strip(), str(contacto).strip()]], columns=["id", "nombre", "rubro", "contacto"])
+    df = pd.concat([df, nuevo_reg], ignore_index=True)
+    save_dataframe("auspiciadores", df)
 
 def eliminar_auspiciador(auspiciador_id):
-    sh = conectar_google_sheets()
-    ws = sh.worksheet("auspiciadores")
-    cell = ws.find(str(int(auspiciador_id)))
-    if cell:
-        ws.delete_rows(cell.row)
+    df = get_dataframe("auspiciadores", ["id", "nombre", "rubro", "contacto"])
+    if not df.empty and "id" in df.columns:
+        df = df[df["id"].astype(int) != int(auspiciador_id)]
+        save_dataframe("auspiciadores", df)
 
 def obtener_jugadores():
     df = get_dataframe("jugadores", ["id", "nombre", "dorsal_o_rut", "categoria", "activo"])
@@ -116,22 +107,17 @@ def obtener_jugadores():
     return df
 
 def agregar_jugador(nombre, dorsal, categoria):
-    sh = conectar_google_sheets()
-    ws = sh.worksheet("jugadores")
     df = get_dataframe("jugadores", ["id", "nombre", "dorsal_o_rut", "categoria", "activo"])
-    nuevo_id = 1
-    if not df.empty and "id" in df.columns:
-        ids = pd.to_numeric(df["id"], errors='coerce').dropna()
-        if not ids.empty:
-            nuevo_id = int(ids.max()) + 1
-    ws.append_row([nuevo_id, str(nombre).strip(), str(dorsal).strip(), str(categoria), 1])
+    nuevo_id = int(df["id"].max()) + 1 if not df.empty and "id" in df.columns and not df["id"].dropna().empty else 1
+    nuevo_reg = pd.DataFrame([[nuevo_id, str(nombre).strip(), str(dorsal).strip(), str(categoria), 1]], columns=["id", "nombre", "dorsal_o_rut", "categoria", "activo"])
+    df = pd.concat([df, nuevo_reg], ignore_index=True)
+    save_dataframe("jugadores", df)
 
 def eliminar_jugador(jugador_id):
-    sh = conectar_google_sheets()
-    ws = sh.worksheet("jugadores")
-    cell = ws.find(str(int(jugador_id)))
-    if cell:
-        ws.update_cell(cell.row, 5, 0)
+    df = get_dataframe("jugadores", ["id", "nombre", "dorsal_o_rut", "categoria", "activo"])
+    if not df.empty and "id" in df.columns:
+        df.loc[df["id"].astype(int) == int(jugador_id), "activo"] = 0
+        save_dataframe("jugadores", df)
 
 def registrar_pago_cuota(jugador_id, nombre_jugador, mes, anio, monto, fecha_pago):
     df_cuotas = get_dataframe("cuotas", ["id", "jugador_id", "mes", "anio", "monto", "fecha_pago"])
@@ -144,58 +130,32 @@ def registrar_pago_cuota(jugador_id, nombre_jugador, mes, anio, monto, fecha_pag
         if not coincide.empty:
             return False, "Esta cuota ya se encuentra registrada para este jugador en este mes."
 
-    sh = conectar_google_sheets()
-    
-    # 1. Guardar en pestaña cuotas
-    ws_cuotas = sh.worksheet("cuotas")
-    nuevo_id_c = 1
-    if not df_cuotas.empty and "id" in df_cuotas.columns:
-        ids_c = pd.to_numeric(df_cuotas["id"], errors='coerce').dropna()
-        if not ids_c.empty:
-            nuevo_id_c = int(ids_c.max()) + 1
-            
     fecha_pago_str = fecha_pago.strftime("%Y-%m-%d") if hasattr(fecha_pago, "strftime") else str(fecha_pago)
-    ws_cuotas.append_row([nuevo_id_c, int(jugador_id), int(mes), int(anio), float(monto), fecha_pago_str])
     
-    # 2. Guardar en pestaña movimientos
+    # 1. Guardar cuota
+    nuevo_id_c = int(df_cuotas["id"].max()) + 1 if not df_cuotas.empty and "id" in df_cuotas.columns and not df_cuotas["id"].dropna().empty else 1
+    nueva_c = pd.DataFrame([[nuevo_id_c, int(jugador_id), int(mes), int(anio), float(monto), fecha_pago_str]], columns=["id", "jugador_id", "mes", "anio", "monto", "fecha_pago"])
+    df_cuotas = pd.concat([df_cuotas, nueva_c], ignore_index=True)
+    save_dataframe("cuotas", df_cuotas)
+    
+    # 2. Guardar en movimientos
     meses_nombre = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
     detalle = f"Cuota {meses_nombre[mes - 1]} {anio} - {nombre_jugador}"
-    
-    ws_mov = sh.worksheet("movimientos")
     df_mov = get_dataframe("movimientos", ["id", "tipo", "subtipo", "monto", "fecha", "detalle", "responsable"])
-    
-    nuevo_id_m = 1
-    if not df_mov.empty and "id" in df_mov.columns:
-        ids_m = pd.to_numeric(df_mov["id"], errors='coerce').dropna()
-        if not ids_m.empty:
-            nuevo_id_m = int(ids_m.max()) + 1
-            
-    ws_mov.append_row([nuevo_id_m, "Cuota Jugador", "Ingreso", float(monto), fecha_pago_str, str(detalle), str(nombre_jugador)])
+    nuevo_id_m = int(df_mov["id"].max()) + 1 if not df_mov.empty and "id" in df_mov.columns and not df_mov["id"].dropna().empty else 1
+    nuevo_m = pd.DataFrame([[nuevo_id_m, "Cuota Jugador", "Ingreso", float(monto), fecha_pago_str, str(detalle), str(nombre_jugador)]], columns=["id", "tipo", "subtipo", "monto", "fecha", "detalle", "responsable"])
+    df_mov = pd.concat([df_mov, nuevo_m], ignore_index=True)
+    save_dataframe("movimientos", df_mov)
     
     return True, "Pago de cuota registrado exitosamente."
 
 def registrar_egreso(tipo_egreso, monto, fecha, detalle, responsable="Directiva"):
-    sh = conectar_google_sheets()
-    ws = sh.worksheet("movimientos")
     df_mov = get_dataframe("movimientos", ["id", "tipo", "subtipo", "monto", "fecha", "detalle", "responsable"])
-    
-    nuevo_id = 1
-    if not df_mov.empty and "id" in df_mov.columns:
-        ids_validos = pd.to_numeric(df_mov["id"], errors='coerce').dropna()
-        if not ids_validos.empty:
-            nuevo_id = int(ids_validos.max()) + 1
-            
+    nuevo_id = int(df_mov["id"].max()) + 1 if not df_mov.empty and "id" in df_mov.columns and not df_mov["id"].dropna().empty else 1
     fecha_str = fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha)
-    
-    ws.append_row([
-        nuevo_id, 
-        str(tipo_egreso), 
-        "Egreso", 
-        float(monto), 
-        fecha_str, 
-        str(detalle), 
-        str(responsable)
-    ])
+    nuevo_m = pd.DataFrame([[nuevo_id, str(tipo_egreso), "Egreso", float(monto), fecha_str, str(detalle), str(responsable)]], columns=["id", "tipo", "subtipo", "monto", "fecha", "detalle", "responsable"])
+    df_mov = pd.concat([df_mov, nuevo_m], ignore_index=True)
+    save_dataframe("movimientos", df_mov)
 
 def obtener_movimientos():
     df = get_dataframe("movimientos", ["id", "fecha", "tipo", "subtipo", "monto", "detalle", "responsable"])
@@ -233,40 +193,31 @@ def obtener_estado_cuotas(mes, anio):
 
 # NOTICIAS Y COMENTARIOS
 def agregar_noticia(titulo, contenido, imagen_bytes, autor="Directiva"):
-    sh = conectar_google_sheets()
-    ws = sh.worksheet("noticias")
     df = get_dataframe("noticias", ["id", "titulo", "contenido", "imagen_b64", "fecha", "autor"])
-    nuevo_id = 1
-    if not df.empty and "id" in df.columns:
-        ids = pd.to_numeric(df["id"], errors='coerce').dropna()
-        if not ids.empty:
-            nuevo_id = int(ids.max()) + 1
+    nuevo_id = int(df["id"].max()) + 1 if not df.empty and "id" in df.columns and not df["id"].dropna().empty else 1
     img_b64 = base64.b64encode(imagen_bytes).decode('utf-8') if imagen_bytes else ""
     fecha_act = datetime.now().strftime("%d/%m/%Y %H:%M")
-    ws.append_row([nuevo_id, str(titulo).strip(), str(contenido).strip(), img_b64, fecha_act, str(autor).strip()])
+    nueva_n = pd.DataFrame([[nuevo_id, str(titulo).strip(), str(contenido).strip(), img_b64, fecha_act, str(autor).strip()]], columns=["id", "titulo", "contenido", "imagen_b64", "fecha", "autor"])
+    df = pd.concat([df, nueva_n], ignore_index=True)
+    save_dataframe("noticias", df)
 
 def obtener_noticias():
     df = get_dataframe("noticias", ["id", "titulo", "contenido", "imagen_b64", "fecha", "autor"])
     return df.sort_values(by="id", ascending=False) if not df.empty and "id" in df.columns else df
 
 def eliminar_noticia(noticia_id):
-    sh = conectar_google_sheets()
-    ws = sh.worksheet("noticias")
-    cell = ws.find(str(int(noticia_id)))
-    if cell:
-        ws.delete_rows(cell.row)
+    df = get_dataframe("noticias", ["id", "titulo", "contenido", "imagen_b64", "fecha", "autor"])
+    if not df.empty and "id" in df.columns:
+        df = df[df["id"].astype(int) != int(noticia_id)]
+        save_dataframe("noticias", df)
 
 def agregar_comentario(noticia_id, nombre_autor, comentario):
-    sh = conectar_google_sheets()
-    ws = sh.worksheet("comentarios")
     df = get_dataframe("comentarios", ["id", "noticia_id", "nombre_autor", "comentario", "fecha"])
-    nuevo_id = 1
-    if not df.empty and "id" in df.columns:
-        ids = pd.to_numeric(df["id"], errors='coerce').dropna()
-        if not ids.empty:
-            nuevo_id = int(ids.max()) + 1
+    nuevo_id = int(df["id"].max()) + 1 if not df.empty and "id" in df.columns and not df["id"].dropna().empty else 1
     fecha_act = datetime.now().strftime("%d/%m/%Y %H:%M")
-    ws.append_row([nuevo_id, int(noticia_id), str(nombre_autor).strip(), str(comentario).strip(), fecha_act])
+    nuevo_c = pd.DataFrame([[nuevo_id, int(noticia_id), str(nombre_autor).strip(), str(comentario).strip(), fecha_act]], columns=["id", "noticia_id", "nombre_autor", "comentario", "fecha"])
+    df = pd.concat([df, nuevo_c], ignore_index=True)
+    save_dataframe("comentarios", df)
 
 def obtener_comentarios(noticia_id):
     df = get_dataframe("comentarios", ["id", "noticia_id", "nombre_autor", "comentario", "fecha"])
@@ -353,21 +304,15 @@ def generar_pdf_informe(mes_nombre, anio, ingresos_tot, egresos_tot, saldo_actua
     return buffer.getvalue()
 
 # ==========================================
-# 3. ENCABEZADO INSTITUCIONAL Y LOGO
+# 3. INTERFAZ GRÁFICA (STREAMLIT)
 # ==========================================
 col_header1, col_header2 = st.columns([1, 5])
-logo_path = "logo_centurion.png" if os.path.exists("logo_centurion.png") else "logo.png"
-
 with col_header1:
-    if os.path.exists(logo_path):
-        st.image(logo_path, width=130)
-    else:
-        st.markdown('<div style="background-color: #002B49; color: white; width: 110px; height: 110px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 40px; font-weight: bold; border: 4px solid #00A3E0;">AC</div>', unsafe_allow_html=True)
+    st.markdown('<div style="background-color: #002B49; color: white; width: 110px; height: 110px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 40px; font-weight: bold; border: 4px solid #00A3E0;">AC</div>', unsafe_allow_html=True)
 
 with col_header2:
-    st.markdown('<div class="header-centurion"><h1>CLUB DEPORTIVO ATLÉTICO CENTURIÓN</h1><p>🔵⚪ Sistema Transparente de Control Financiero & Comunidad (Google Sheets Cloud) ⚪🔵</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-centurion"><h1>CLUB DEPORTIVO ATLÉTICO CENTURIÓN</h1><p>🔵⚪ Sistema Transparente de Control Financiero & Comunidad (Versión Local Estable) ⚪🔵</p></div>', unsafe_allow_html=True)
 
-# GESTIÓN DE SESIÓN EN SIDEBAR
 st.sidebar.header("🔐 Acceso al Sistema")
 if not st.session_state["es_admin"]:
     rol = st.sidebar.radio("Modalidad de Vista:", ["👁️ Transparencia Pública (Ver Datos)", "🔑 Administración"])
@@ -390,21 +335,18 @@ else:
         st.rerun()
 
 es_admin = st.session_state["es_admin"]
-
 ingresos_tot, egresos_tot, saldo_actual = calcular_resumen()
 st.sidebar.divider()
 st.sidebar.metric(label="💰 SALDO TOTAL DISPONIBLE", value=f"${saldo_actual:,.0f}".replace(",", "."))
 
-# Pestañas Principales
 tab_noticias, tab_cartola, tab_cuotas, tab_arbitros, tab_compras, tab_jugadores, tab_pdf, tab_admin_ausp = st.tabs([
     "📰 Noticias & Club", "📜 Cartola Bancaria", "👟 Cuotas Mensuales", "🏁 Pago a Árbitros", "🛒 Compras del Club", "👥 Plantel de Jugadores", "📄 Descargar Informe PDF", "🤝 Auspiciadores"
 ])
 
-# TAB 1: NOTICIAS
 with tab_noticias:
     st.subheader("📰 Novedades y Muro del Club Atlético Centurión")
     if es_admin:
-        with st.expander("➕ Publicar Nueva Noticia / Foto del Partido", expanded=False):
+        with st.expander("➕ Publicar Nueva Noticia", expanded=False):
             with st.form("form_nueva_noticia", clear_on_submit=True):
                 tit_noticia = st.text_input("Título de la Noticia:")
                 autor_noticia = st.text_input("Firma / Autor:", value="Directiva Atlético Centurión")
@@ -441,17 +383,17 @@ with tab_noticias:
                     st.toast("Noticia eliminada.", icon="🗑️")
                     st.rerun()
             
-            st.markdown("##### 💬 Comentarios de la Hinchada y Plantel")
+            st.markdown("##### 💬 Comentarios")
             df_coment = obtener_comentarios(noticia_id)
             if not df_coment.empty:
                 for _, c in df_coment.iterrows():
                     st.markdown(f'<div class="comment-box"><b>👤 {c["nombre_autor"]}</b> <small style="color:#64748B;">({c["fecha"]})</small><br><span>{c["comentario"]}</span></div>', unsafe_allow_html=True)
             else:
-                st.info("Aún no hay comentarios. ¡Sé el primero en opinar!")
+                st.info("Aún no hay comentarios.")
             
             with st.expander(f"✍️ Comentar en '{n['titulo']}'", expanded=False):
                 with st.form(key=f"form_comentario_{noticia_id}", clear_on_submit=True):
-                    nombre_com = st.text_input("Tu Nombre / Apodo (Obligatorio):", key=f"nom_com_{noticia_id}")
+                    nombre_com = st.text_input("Tu Nombre / Apodo:", key=f"nom_com_{noticia_id}")
                     texto_com = st.text_area("Escribe tu comentario:", key=f"txt_com_{noticia_id}")
                     btn_coment = st.form_submit_button("💬 Enviar Comentario")
                     if btn_coment:
@@ -459,13 +401,10 @@ with tab_noticias:
                             agregar_comentario(noticia_id, nombre_com, texto_com)
                             st.toast("¡Comentario enviado!", icon="💬")
                             st.rerun()
-                        else:
-                            st.error("Ingresa tu nombre y comentario para poder enviar.")
             st.divider()
     else:
-        st.info("No hay noticias publicadas por el momento.")
+        st.info("No hay noticias publicadas.")
 
-# TAB 2: CARTOLA
 with tab_cartola:
     st.subheader("📜 Cartola Financiera del Club")
     c1, c2, c3 = st.columns(3)
@@ -482,7 +421,6 @@ with tab_cartola:
     else:
         st.info("Aún no hay movimientos registrados.")
 
-# TAB 3: CUOTAS
 with tab_cuotas:
     st.subheader("👟 Control de Cuotas Mensuales")
     col_mes, col_anio = st.columns(2)
@@ -518,7 +456,6 @@ with tab_cuotas:
     else:
         st.info("No hay jugadores ingresados.")
 
-# TAB 4: ÁRBITROS
 with tab_arbitros:
     st.subheader("🏁 Control de Pago a Árbitros")
     if es_admin:
@@ -541,7 +478,6 @@ with tab_arbitros:
         if not df_arb.empty:
             st.dataframe(df_arb[['fecha', 'monto', 'detalle', 'responsable']], use_container_width=True)
 
-# TAB 5: COMPRAS
 with tab_compras:
     st.subheader("🛒 Compras e Inversiones del Club")
     if es_admin:
@@ -549,9 +485,9 @@ with tab_compras:
             col_c1, col_c2 = st.columns(2)
             monto_compra = col_c1.number_input("Monto de la Compra ($):", min_value=1000, value=15000, step=1000)
             fecha_compra = col_c2.date_input("Fecha de Compra:", datetime.now())
-            concepto_compra = st.text_input("Detalle de la Compra:", placeholder="Ej: 3 Balones N°5, botiquín")
+            concepto_compra = st.text_input("Detalle de la Compra:", placeholder="Ej: 3 Balones N°5")
             comprobante = st.text_input("N° Boleta / Factura:", placeholder="Ej: Boleta N° 45812")
-            if st.form_submit_button("🛒 Registrar Compra y Descontar del Saldo"):
+            if st.form_submit_button("🛒 Registrar Compra"):
                 detalle_compra = f"Compra: {concepto_compra} [{comprobante}]" if comprobante else f"Compra: {concepto_compra}"
                 registrar_egreso("Compra Club", monto_compra, fecha_compra, detalle_compra, "Tesorería")
                 st.toast(f"Compra de ${monto_compra:,.0f} registrada.", icon="🛒")
@@ -563,7 +499,6 @@ with tab_compras:
         if not df_comp.empty:
             st.dataframe(df_comp[['fecha', 'monto', 'detalle', 'responsable']], use_container_width=True)
 
-# TAB 6: JUGADORES
 with tab_jugadores:
     st.subheader("👥 Plantel de Jugadores")
     if es_admin:
@@ -578,37 +513,34 @@ with tab_jugadores:
                 if btn_add_j:
                     if nom_jugador.strip():
                         agregar_jugador(nom_jugador, dorsal_jugador, cat_jugador)
-                        st.toast(f"Jugador '{nom_jugador}' inscrito exitosamente.", icon="🎉")
+                        st.toast(f"Jugador '{nom_jugador}' inscrito con éxito.", icon="🎉")
                         st.rerun()
                     else:
-                        st.error("Debes ingresar al menos el nombre del jugador.")
+                        st.error("Ingresa el nombre del jugador.")
 
         with col_j_del:
-            st.markdown("#### ❌ Eliminar / Dar de Baja Jugador")
+            st.markdown("#### ❌ Dar de Baja Jugador")
             df_plantel_actual = obtener_jugadores()
             if not df_plantel_actual.empty and "nombre" in df_plantel_actual.columns:
-                jugador_del_nombre = st.selectbox("Seleccionar Jugador a Eliminar:", df_plantel_actual["nombre"].tolist(), key="select_del_jugador")
+                jugador_del_nombre = st.selectbox("Seleccionar Jugador:", df_plantel_actual["nombre"].tolist(), key="select_del_jugador")
                 if st.button("🗑️ Eliminar Jugador Seleccionado", key="btn_del_jugador"):
                     jug_id = int(df_plantel_actual[df_plantel_actual["nombre"] == jugador_del_nombre]["id"].values[0])
                     eliminar_jugador(jug_id)
-                    st.toast(f"Jugador '{jugador_del_nombre}' dado de baja.", icon="🗑️")
+                    st.toast(f"Jugador dado de baja.", icon="🗑️")
                     st.rerun()
             else:
-                st.info("No hay jugadores registrados para eliminar.")
+                st.info("No hay jugadores registrados.")
 
     df_plantel = obtener_jugadores()
     st.write(f"**Total Jugadores Activos:** {len(df_plantel)}")
     if not df_plantel.empty and "nombre" in df_plantel.columns:
         st.dataframe(df_plantel[["nombre", "dorsal_o_rut", "categoria"]], use_container_width=True)
 
-# TAB 7: GENERAR E IMPRIMIR PDF
 with tab_pdf:
     st.subheader("📄 Generación de Informe Financiero Oficial (PDF)")
-    st.write("Genera un documento PDF oficial descargable e imprimible con las estadísticas de gastos, cuotas de jugadores al día y deudores.")
-    
     col_pdf_m, col_pdf_a = st.columns(2)
-    mes_pdf_num = col_pdf_m.selectbox("Mes del Informe PDF:", list(meses_dict.keys()), format_func=lambda x: meses_dict[x], index=datetime.now().month - 1)
-    anio_pdf_val = col_pdf_a.number_input("Año del Informe PDF:", min_value=2024, max_value=2030, value=datetime.now().year, key="anio_pdf_input")
+    mes_pdf_num = col_pdf_m.selectbox("Mes:", list(meses_dict.keys()), format_func=lambda x: meses_dict[x], index=datetime.now().month - 1)
+    anio_pdf_val = col_pdf_a.number_input("Año:", min_value=2024, max_value=2030, value=datetime.now().year, key="anio_pdf_input")
     
     df_est_pdf = obtener_estado_cuotas(mes_pdf_num, anio_pdf_val)
     df_mov_pdf = obtener_movimientos()
@@ -616,15 +548,9 @@ with tab_pdf:
     
     st.divider()
     p1, p2, p3 = st.columns(3)
-    p1.metric("Ingresos Totales", f"${ing_p:,.0f}".replace(",", "."))
-    p2.metric("Egresos Totales", f"${egr_p:,.0f}".replace(",", "."))
-    p3.metric("Saldo Disponible", f"${sal_p:,.0f}".replace(",", "."))
-    
-    if not df_est_pdf.empty and "estado" in df_est_pdf.columns:
-        total_p = len(df_est_pdf)
-        al_dia = len(df_est_pdf[df_est_pdf['estado'] == 'PAGADO'])
-        deudores = total_p - al_dia
-        st.info(f"📊 **Resumen Plantel {meses_dict[mes_pdf_num]} {anio_pdf_val}:** Total Jugadores: {total_p} | ✅ Al día: {al_dia} | ❌ Deudores: {deudores}")
+    p1.metric("Ingresos", f"${ing_p:,.0f}".replace(",", "."))
+    p2.metric("Egresos", f"${egr_p:,.0f}".replace(",", "."))
+    p3.metric("Saldo", f"${sal_p:,.0f}".replace(",", "."))
     
     pdf_bytes = generar_pdf_informe(
         mes_nombre=meses_dict[mes_pdf_num],
@@ -644,38 +570,18 @@ with tab_pdf:
         use_container_width=True
     )
 
-# TAB 8: GESTIÓN DE AUSPICIADORES
 with tab_admin_ausp:
-    st.subheader("🤝 Gestión de Auspiciadores del Club")
+    st.subheader("🤝 Gestión de Auspiciadores")
     if es_admin:
-        col_aus_add, col_aus_del = st.columns(2)
-        with col_aus_add:
-            st.markdown("#### ➕ Agregar Nuevo Auspiciador")
-            with st.form("form_nuevo_auspiciador", clear_on_submit=True):
-                aus_nombre = st.text_input("Nombre de la Empresa / Marca:")
-                aus_rubro = st.text_input("Rubro / Tipo de Apoyo:")
-                aus_contacto = st.text_input("Contacto / Detalle:")
-                btn_add_ausp = st.form_submit_button("Guardar Auspiciador")
-                if btn_add_ausp:
-                    if aus_nombre.strip():
-                        agregar_auspiciador(aus_nombre, aus_rubro, aus_contacto)
-                        st.toast(f"Auspiciador '{aus_nombre}' agregado con éxito.", icon="🎉")
-                        st.rerun()
-                    else:
-                        st.error("Ingresa el nombre del auspiciador.")
-
-        with col_aus_del:
-            st.markdown("#### ❌ Eliminar Auspiciador")
-            df_ausp_actual = obtener_auspiciadores()
-            if not df_ausp_actual.empty and "nombre" in df_ausp_actual.columns:
-                aus_eliminar_nombre = st.selectbox("Seleccionar Auspiciador a Eliminar:", df_ausp_actual["nombre"].tolist(), key="select_del_ausp")
-                if st.button("🗑️ Eliminar Auspiciador Seleccionado", key="btn_del_ausp"):
-                    aus_id = int(df_ausp_actual[df_ausp_actual["nombre"] == aus_eliminar_nombre]["id"].values[0])
-                    eliminar_auspiciador(aus_id)
-                    st.toast(f"Auspiciador '{aus_eliminar_nombre}' eliminado.", icon="🗑️")
+        with st.form("form_nuevo_auspiciador", clear_on_submit=True):
+            aus_nombre = st.text_input("Empresa / Marca:")
+            aus_rubro = st.text_input("Rubro:")
+            aus_contacto = st.text_input("Contacto:")
+            if st.form_submit_button("Guardar Auspiciador"):
+                if aus_nombre.strip():
+                    agregar_auspiciador(aus_nombre, aus_rubro, aus_contacto)
+                    st.toast("Auspiciador agregado.", icon="🎉")
                     st.rerun()
-            else:
-                st.info("No hay auspiciadores para eliminar.")
 
     df_ausp = obtener_auspiciadores()
     if not df_ausp.empty and "nombre" in df_ausp.columns:
@@ -684,7 +590,7 @@ with tab_admin_ausp:
 # FOOTER
 st.markdown("---")
 df_ausp_footer = obtener_auspiciadores()
-sponsors_html = '<div class="footer-sponsors"><h3>🤝 NUESTROS AUSPICIADORES Y PATROCINADORES</h3><p>Agradecemos el constante apoyo al Club Deportivo Atlético Centurión</p><div style="margin-top: 15px;">'
+sponsors_html = '<div class="footer-sponsors"><h3>🤝 NUESTROS AUSPICIADORES</h3><div style="margin-top: 15px;">'
 if not df_ausp_footer.empty and "nombre" in df_ausp_footer.columns:
     for _, row in df_ausp_footer.iterrows():
         sponsors_html += f'<div class="sponsor-badge">⭐ {row["nombre"]} <span>{row["rubro"]}</span></div>'
