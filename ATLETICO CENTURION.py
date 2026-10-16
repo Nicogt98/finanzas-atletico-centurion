@@ -30,7 +30,6 @@ def conectar_google_sheets():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    # Corrección automática de saltos de línea para evitar el error ValueError en private_key
     creds_dict = dict(st.secrets["gcp_service_account"])
     if "private_key" in creds_dict:
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
@@ -40,7 +39,8 @@ def conectar_google_sheets():
         scopes=scopes
     )
     client = gspread.authorize(credentials)
-    sheet = client.open("Finanzas Atletico Centurion")
+    # Conexión directa mediante el ID único de tu planilla para evitar fallos de nombre
+    sheet = client.open_by_key("14ZW9Nvi_pF77HZqwYPUYOL_YRQZLUghm3k5JqwygeIk")
     return sheet
 
 def get_dataframe(sheet_name, columns):
