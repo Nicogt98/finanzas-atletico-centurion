@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime
 import os
 import io
+import base64
 
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
@@ -14,7 +15,7 @@ from reportlab.lib import colors
 # 1. CONFIGURACIÓN DE PÁGINA Y ESTADO DE SESIÓN
 # ==========================================
 st.set_page_config(
-    page_title="Atlético Centurión - Finanzas",
+    page_title="Atlético Centurión - Finanzas & Club",
     page_icon="⚽",
     layout="wide"
 )
@@ -122,6 +123,23 @@ st.markdown("""
         color: #64748B;
         font-weight: 400;
     }
+
+    .news-card {
+        background-color: #FFFFFF;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        border-left: 5px solid #00A3E0;
+    }
+
+    .comment-box {
+        background-color: #F1F5F9;
+        border-radius: 8px;
+        padding: 10px 15px;
+        margin-top: 8px;
+        border-left: 3px solid #002B49;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -176,6 +194,28 @@ def init_db():
             contacto TEXT
         )
     """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS noticias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo TEXT NOT NULL,
+            contenido TEXT NOT NULL,
+            imagen_b64 TEXT,
+            fecha TEXT NOT NULL,
+            autor TEXT
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS comentarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            noticia_id INTEGER NOT NULL,
+            nombre_autor TEXT NOT NULL,
+            comentario TEXT NOT NULL,
+            fecha TEXT NOT NULL,
+            FOREIGN KEY (noticia_id) REFERENCES noticias (id)
+        )
+    """)
     
     c.execute("SELECT COUNT(*) FROM auspiciadores")
     if c.fetchone()[0] == 0:
@@ -184,6 +224,19 @@ def init_db():
             ("Deportes Centurión", "Indumentaria Deportiva", "Sponsor Oficial"),
             ("Agua Purificada Centurión", "Hidratación", "Sponsor Oficial")
         ])
+
+    c.execute("SELECT COUNT(*) FROM noticias")
+    if c.fetchone()[0] == 0:
+        c.execute("""
+            INSERT INTO noticias (titulo, contenido, imagen_b64, fecha, autor)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            "¡Bienvenidos a la plataforma oficial del Atlético Centurión!",
+            "Inauguramos nuestra nueva web institucional para mantener la transparencia en las finanzas del club y compartir las mejores postales de nuestros partidos. ¡Deja tu comentario abajo!",
+            None,
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "Directiva Atlético Centurión"
+        ))
     
     conn.commit()
     conn.close()
@@ -202,14 +255,14 @@ def obtener_auspiciadores():
 def agregar_auspiciador(nombre, rubro, contacto):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("INSERT INTO auspiciadores (nombre, rubro, contacto) VALUES (?, ?, ?)", (nombre, rubro, contacto))
+    c.execute("INSERT INTO auspiciadores (nombre, rubro, contacto) VALUES (?, ?, ?)", (str(nombre).strip(), str(rubro).strip(), str(contacto).strip()))
     conn.commit()
     conn.close()
 
 def eliminar_auspiciador(auspiciador_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM auspiciadores WHERE id = ?", (auspiciador_id,))
+    c.execute("DELETE FROM auspiciadores WHERE id = ?", (int(auspiciador_id),))
     conn.commit()
     conn.close()
 
@@ -222,34 +275,34 @@ def obtener_jugadores():
 def agregar_jugador(nombre, dorsal, categoria):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("INSERT INTO jugadores (nombre, dorsal_o_rut, categoria) VALUES (?, ?, ?)", (nombre, dorsal, categoria))
+    c.execute("INSERT INTO jugadores (nombre, dorsal_o_rut, categoria, activo) VALUES (?, ?, ?, 1)", (str(nombre).strip(), str(dorsal).strip(), str(categoria)))
     conn.commit()
     conn.close()
 
 def eliminar_jugador(jugador_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE jugadores SET activo = 0 WHERE id = ?", (jugador_id,))
+    c.execute("UPDATE jugadores SET activo = 0 WHERE id = ?", (int(jugador_id),))
     conn.commit()
     conn.close()
 
 def registrar_pago_cuota(jugador_id, nombre_jugador, mes, anio, monto, fecha_pago):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id FROM cuotas WHERE jugador_id = ? AND mes = ? AND anio = ?", (jugador_id, mes, anio))
+    c.execute("SELECT id FROM cuotas WHERE jugador_id = ? AND mes = ? AND anio = ?", (int(jugador_id), int(mes), int(anio)))
     if c.fetchone():
         conn.close()
         return False, "Esta cuota ya se encuentra registrada para este jugador en este mes."
     
     c.execute("INSERT INTO cuotas (jugador_id, mes, anio, monto, fecha_pago) VALUES (?, ?, ?, ?, ?)",
-              (jugador_id, mes, anio, monto, fecha_pago))
+              (int(jugador_id), int(mes), int(anio), float(monto), fecha_pago))
     
     meses_nombre = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
     nombre_mes = meses_nombre[mes - 1]
     detalle = f"Cuota {nombre_mes} {anio} - {nombre_jugador}"
     
     c.execute("INSERT INTO movimientos (tipo, subtipo, monto, fecha, detalle, responsable) VALUES (?, ?, ?, ?, ?, ?)",
-              ("Cuota Jugador", "Ingreso", monto, fecha_pago, detalle, nombre_jugador))
+              ("Cuota Jugador", "Ingreso", float(monto), fecha_pago, detalle, nombre_jugador))
     
     conn.commit()
     conn.close()
@@ -259,7 +312,7 @@ def registrar_egreso(tipo_egreso, monto, fecha, detalle, responsable="Directiva"
     conn = get_connection()
     c = conn.cursor()
     c.execute("INSERT INTO movimientos (tipo, subtipo, monto, fecha, detalle, responsable) VALUES (?, ?, ?, ?, ?, ?)",
-              (tipo_egreso, "Egreso", monto, fecha, detalle, responsable))
+              (tipo_egreso, "Egreso", float(monto), fecha, detalle, responsable))
     conn.commit()
     conn.close()
 
@@ -291,7 +344,51 @@ def obtener_estado_cuotas(mes, anio):
         WHERE j.activo = 1
         ORDER BY j.nombre ASC
     """
-    df = pd.read_sql_query(query, conn, params=(mes, anio))
+    df = pd.read_sql_query(query, conn, params=(int(mes), int(anio)))
+    conn.close()
+    return df
+
+# FUNCIONES PARA NOTICIAS Y COMENTARIOS
+def agregar_noticia(titulo, contenido, imagen_bytes, autor="Directiva"):
+    conn = get_connection()
+    c = conn.cursor()
+    img_b64 = base64.b64encode(imagen_bytes).decode('utf-8') if imagen_bytes else None
+    fecha_actual = datetime.now().strftime("%d/%m/%Y %H:%M")
+    c.execute("""
+        INSERT INTO noticias (titulo, contenido, imagen_b64, fecha, autor)
+        VALUES (?, ?, ?, ?, ?)
+    """, (str(titulo).strip(), str(contenido).strip(), img_b64, fecha_actual, str(autor).strip()))
+    conn.commit()
+    conn.close()
+
+def obtener_noticias():
+    conn = get_connection()
+    df = pd.read_sql_query("SELECT id, titulo, contenido, imagen_b64, fecha, autor FROM noticias ORDER BY id DESC", conn)
+    conn.close()
+    return df
+
+def eliminar_noticia(noticia_id):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM comentarios WHERE noticia_id = ?", (int(noticia_id),))
+    c.execute("DELETE FROM noticias WHERE id = ?", (int(noticia_id),))
+    conn.commit()
+    conn.close()
+
+def agregar_comentario(noticia_id, nombre_autor, comentario):
+    conn = get_connection()
+    c = conn.cursor()
+    fecha_actual = datetime.now().strftime("%d/%m/%Y %H:%M")
+    c.execute("""
+        INSERT INTO comentarios (noticia_id, nombre_autor, comentario, fecha)
+        VALUES (?, ?, ?, ?)
+    """, (int(noticia_id), str(nombre_autor).strip(), str(comentario).strip(), fecha_actual))
+    conn.commit()
+    conn.close()
+
+def obtener_comentarios(noticia_id):
+    conn = get_connection()
+    df = pd.read_sql_query("SELECT id, nombre_autor, comentario, fecha FROM comentarios WHERE noticia_id = ? ORDER BY id ASC", conn, params=(int(noticia_id),))
     conn.close()
     return df
 
@@ -327,12 +424,10 @@ def generar_pdf_informe(mes_nombre, anio, ingresos_tot, egresos_tot, saldo_actua
     
     story = []
     
-    # Encabezado Documento
     story.append(Paragraph("CLUB DEPORTIVO ATLÉTICO CENTURIÓN", title_style))
     story.append(Paragraph(f"INFORME FINANCIERO Y ESTADO DE CUOTAS — {mes_nombre.upper()} {anio}", subtitle_style))
     story.append(HRFlowable(width="100%", thickness=2, color=secondary_color, spaceAfter=15))
     
-    # 1. Resumen Ejecutivo
     story.append(Paragraph("1. Resumen Ejecutivo de Saldos", h2_style))
     met_data = [
         [
@@ -358,7 +453,6 @@ def generar_pdf_informe(mes_nombre, anio, ingresos_tot, egresos_tot, saldo_actua
     story.append(met_table)
     story.append(Spacer(1, 12))
     
-    # 2. Estado de Cuotas
     story.append(Paragraph(f"2. Estado de Cuotas de Jugadores — {mes_nombre} {anio}", h2_style))
     total_jug = len(df_estado) if df_estado is not None else 0
     pagados_cnt = len(df_estado[df_estado['estado'] == 'PAGADO']) if df_estado is not None and not df_estado.empty else 0
@@ -406,7 +500,6 @@ def generar_pdf_informe(mes_nombre, anio, ingresos_tot, egresos_tot, saldo_actua
         
     story.append(Spacer(1, 12))
     
-    # 3. Detalle de Egresos
     story.append(Paragraph("3. Historial de Gastos y Compras del Club", h2_style))
     if df_mov is not None and not df_mov.empty:
         df_egr = df_mov[df_mov['subtipo'] == 'Egreso']
@@ -470,13 +563,11 @@ with col_header2:
     st.markdown("""
         <div class="header-centurion">
             <h1>CLUB DEPORTIVO ATLÉTICO CENTURIÓN</h1>
-            <p>🔵⚪ Sistema Transparente de Control Financiero (Ingresos & Egresos) ⚪🔵</p>
+            <p>🔵⚪ Sistema Transparente de Control Financiero & Comunidad ⚪🔵</p>
         </div>
     """, unsafe_allow_html=True)
 
-# ==========================================
-# GESTIÓN DE SESIÓN EN SIDEBAR (PERSISTENTE)
-# ==========================================
+# GESTIÓN DE SESIÓN EN SIDEBAR
 st.sidebar.header("🔐 Acceso al Sistema")
 
 if not st.session_state["es_admin"]:
@@ -517,7 +608,8 @@ st.sidebar.divider()
 st.sidebar.metric(label="💰 SALDO TOTAL DISPONIBLE", value=f"${saldo_actual:,.0f}".replace(",", "."))
 
 # Pestañas Principales
-tab_cartola, tab_cuotas, tab_arbitros, tab_compras, tab_jugadores, tab_pdf, tab_admin_ausp = st.tabs([
+tab_noticias, tab_cartola, tab_cuotas, tab_arbitros, tab_compras, tab_jugadores, tab_pdf, tab_admin_ausp = st.tabs([
+    "📰 Noticias & Club",
     "📜 Cartola Bancaria", 
     "👟 Cuotas Mensuales", 
     "🏁 Pago a Árbitros", 
@@ -527,7 +619,83 @@ tab_cartola, tab_cuotas, tab_arbitros, tab_compras, tab_jugadores, tab_pdf, tab_
     "🤝 Auspiciadores"
 ])
 
-# TAB 1: CARTOLA
+# TAB 1: NOTICIAS Y COMUNIDAD
+with tab_noticias:
+    st.subheader("📰 Novedades y Muro del Club Atlético Centurión")
+    
+    if es_admin:
+        with st.expander("➕ Publicar Nueva Noticia / Foto del Partido", expanded=False):
+            with st.form("form_nueva_noticia", clear_on_submit=True):
+                tit_noticia = st.text_input("Título de la Noticia:")
+                autor_noticia = st.text_input("Firma / Autor:", value="Directiva Atlético Centurión")
+                foto_noticia = st.file_uploader("Subir Foto (.jpg, .png):", type=["jpg", "jpeg", "png"])
+                cont_noticia = st.text_area("Contenido / Detalle de la Noticia:")
+                btn_pub = st.form_submit_button("📣 Publicar Noticia")
+                
+                if btn_pub:
+                    if tit_noticia.strip() and cont_noticia.strip():
+                        img_bytes = foto_noticia.getvalue() if foto_noticia is not None else None
+                        agregar_noticia(tit_noticia, cont_noticia, img_bytes, autor_noticia)
+                        st.toast("Noticia publicada exitosamente.", icon="🎉")
+                        st.rerun()
+                    else:
+                        st.error("Debes ingresar un título y contenido.")
+
+    df_noticias = obtener_noticias()
+    if not df_noticias.empty:
+        for _, n in df_noticias.iterrows():
+            noticia_id = int(n['id'])
+            st.markdown(f"### ⚽ {n['titulo']}")
+            st.caption(f"📅 Publicado el {n['fecha']} por **{n['autor']}**")
+            
+            if n['imagen_b64']:
+                try:
+                    img_data = base64.b64decode(n['imagen_b64'])
+                    st.image(img_data, use_container_width=True)
+                except Exception:
+                    pass
+            
+            st.write(n['contenido'])
+            
+            if es_admin:
+                if st.button(f"🗑️ Eliminar Noticia N° {noticia_id}", key=f"del_not_{noticia_id}"):
+                    eliminar_noticia(noticia_id)
+                    st.toast("Noticia eliminada.", icon="🗑️")
+                    st.rerun()
+            
+            # SECCIÓN DE COMENTARIOS
+            st.markdown("##### 💬 Comentarios de la Hinchada y Plantel")
+            df_coment = obtener_comentarios(noticia_id)
+            if not df_coment.empty:
+                for _, c in df_coment.iterrows():
+                    st.markdown(f"""
+                        <div class="comment-box">
+                            <b>👤 {c['nombre_autor']}</b> <small style="color:#64748B;">({c['fecha']})</small><br>
+                            <span>{c['comentario']}</span>
+                        </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("Aún no hay comentarios. ¡Sé el primero en opinar!")
+            
+            # Formulario para dejar un nuevo comentario (Público)
+            with st.expander(f"✍️ Comentar en '{n['titulo']}'", expanded=False):
+                with st.form(key=f"form_comentario_{noticia_id}", clear_on_submit=True):
+                    nombre_com = st.text_input("Tu Nombre / Apodo (Obligatorio):", key=f"nom_com_{noticia_id}")
+                    texto_com = st.text_area("Escribe tu comentario:", key=f"txt_com_{noticia_id}")
+                    btn_coment = st.form_submit_button("💬 Enviar Comentario")
+                    
+                    if btn_coment:
+                        if nombre_com.strip() and texto_com.strip():
+                            agregar_comentario(noticia_id, nombre_com, texto_com)
+                            st.toast("¡Comentario enviado!", icon="💬")
+                            st.rerun()
+                        else:
+                            st.error("Ingresa tu nombre y comentario para poder enviar.")
+            st.divider()
+    else:
+        st.info("No hay noticias publicadas por el momento.")
+
+# TAB 2: CARTOLA
 with tab_cartola:
     st.subheader("📜 Cartola Financiera del Club")
     c1, c2, c3 = st.columns(3)
@@ -547,7 +715,7 @@ with tab_cartola:
     else:
         st.info("Aún no hay movimientos registrados.")
 
-# TAB 2: CUOTAS
+# TAB 3: CUOTAS
 with tab_cuotas:
     st.subheader("👟 Control de Cuotas Mensuales")
     col_mes, col_anio = st.columns(2)
@@ -565,10 +733,10 @@ with tab_cuotas:
                 fecha_cuota = col_j3.date_input("Fecha de Pago:", datetime.now())
                 
                 if st.button("💰 Registrar Pago de Cuota"):
-                    jugador_id = df_jugs[df_jugs["nombre"] == jugador_sel]["id"].values[0]
+                    jugador_id = int(df_jugs[df_jugs["nombre"] == jugador_sel]["id"].values[0])
                     exito, msg = registrar_pago_cuota(jugador_id, jugador_sel, mes_sel, anio_sel, monto_cuota, fecha_cuota.strftime("%Y-%m-%d"))
                     if exito:
-                        st.success(msg)
+                        st.toast(msg, icon="✅")
                         st.rerun()
                     else:
                         st.error(msg)
@@ -583,7 +751,7 @@ with tab_cuotas:
     else:
         st.info("No hay jugadores ingresados.")
 
-# TAB 3: ÁRBITROS
+# TAB 4: ÁRBITROS
 with tab_arbitros:
     st.subheader("🏁 Control de Pago a Árbitros")
     if es_admin:
@@ -597,7 +765,7 @@ with tab_arbitros:
             if st.form_submit_button("🚨 Registrar Pago y Descontar del Saldo"):
                 concepto = f"Arbitraje: {rival} ({detalle_arb})" if detalle_arb else f"Arbitraje: {rival}"
                 registrar_egreso("Pago Árbitros", monto_arb, fecha_arb.strftime("%Y-%m-%d"), concepto, "Tesorería")
-                st.success(f"Pago de ${monto_arb:,.0f} a árbitros registrado.")
+                st.toast(f"Pago de ${monto_arb:,.0f} registrado.", icon="⚽")
                 st.rerun()
 
     st.write("### Historial de Pagos a Árbitros")
@@ -607,7 +775,7 @@ with tab_arbitros:
         if not df_arb.empty:
             st.dataframe(df_arb[['fecha', 'monto', 'detalle', 'responsable']], use_container_width=True)
 
-# TAB 4: COMPRAS
+# TAB 5: COMPRAS
 with tab_compras:
     st.subheader("🛒 Compras e Inversiones del Club")
     if es_admin:
@@ -621,7 +789,7 @@ with tab_compras:
             if st.form_submit_button("🛒 Registrar Compra y Descontar del Saldo"):
                 detalle_compra = f"Compra: {concepto_compra} [{comprobante}]" if comprobante else f"Compra: {concepto_compra}"
                 registrar_egreso("Compra Club", monto_compra, fecha_compra.strftime("%Y-%m-%d"), detalle_compra, "Tesorería")
-                st.success(f"Compra de ${monto_compra:,.0f} registrada correctamente.")
+                st.toast(f"Compra de ${monto_compra:,.0f} registrada.", icon="🛒")
                 st.rerun()
 
     st.write("### Historial de Compras")
@@ -630,44 +798,47 @@ with tab_compras:
         if not df_comp.empty:
             st.dataframe(df_comp[['fecha', 'monto', 'detalle', 'responsable']], use_container_width=True)
 
-# TAB 5: JUGADORES
+# TAB 6: JUGADORES
 with tab_jugadores:
     st.subheader("👥 Plantel de Jugadores")
     if es_admin:
         col_j_add, col_j_del = st.columns(2)
+        
         with col_j_add:
+            st.markdown("#### ➕ Inscribir Nuevo Jugador")
             with st.form("form_nuevo_jugador", clear_on_submit=True):
-                st.write("#### ➕ Inscribir Nuevo Jugador")
                 nom_jugador = st.text_input("Nombre Completo:")
                 dorsal_jugador = st.text_input("Dorsal o RUT:")
                 cat_jugador = st.selectbox("Categoría:", ["Adulto / Serie Honor", "Seniors", "Super Seniors", "Juvenil", "Femenino"])
+                btn_add_j = st.form_submit_button("Guardar Jugador")
                 
-                if st.form_submit_button("Guardar Jugador"):
+                if btn_add_j:
                     if nom_jugador.strip():
                         agregar_jugador(nom_jugador, dorsal_jugador, cat_jugador)
-                        st.success(f"Jugador '{nom_jugador}' inscrito exitosamente.")
+                        st.toast(f"Jugador '{nom_jugador}' inscrito exitosamente.", icon="🎉")
                         st.rerun()
                     else:
                         st.error("Debes ingresar al menos el nombre del jugador.")
 
         with col_j_del:
+            st.markdown("#### ❌ Eliminar / Dar de Baja Jugador")
             df_plantel_actual = obtener_jugadores()
             if not df_plantel_actual.empty:
-                with st.form("form_eliminar_jugador"):
-                    st.write("#### ❌ Eliminar / Dar de Baja Jugador")
-                    jugador_del = st.selectbox("Seleccionar Jugador a Eliminar:", df_plantel_actual["nombre"].tolist())
-                    if st.form_submit_button("Eliminar Jugador Seleccionado"):
-                        jug_id = df_plantel_actual[df_plantel_actual["nombre"] == jugador_del]["id"].values[0]
-                        eliminar_jugador(jug_id)
-                        st.success(f"Jugador '{jugador_del}' dado de baja.")
-                        st.rerun()
+                jugador_del_nombre = st.selectbox("Seleccionar Jugador a Eliminar:", df_plantel_actual["nombre"].tolist(), key="select_del_jugador")
+                if st.button("🗑️ Eliminar Jugador Seleccionado", key="btn_del_jugador"):
+                    jug_id = int(df_plantel_actual[df_plantel_actual["nombre"] == jugador_del_nombre]["id"].values[0])
+                    eliminar_jugador(jug_id)
+                    st.toast(f"Jugador '{jugador_del_nombre}' dado de baja.", icon="🗑️")
+                    st.rerun()
+            else:
+                st.info("No hay jugadores registrados para eliminar.")
 
     df_plantel = obtener_jugadores()
     st.write(f"**Total Jugadores Activos:** {len(df_plantel)}")
     if not df_plantel.empty:
         st.dataframe(df_plantel[["nombre", "dorsal_o_rut", "categoria"]], use_container_width=True)
 
-# TAB 6: GENERAR E IMPRIMIR PDF
+# TAB 7: GENERAR E IMPRIMIR PDF
 with tab_pdf:
     st.subheader("📄 Generación de Informe Financiero Oficial (PDF)")
     st.write("Genera un documento PDF oficial descargable e imprimible con las estadísticas de gastos, cuotas de jugadores al día y deudores.")
@@ -710,38 +881,41 @@ with tab_pdf:
         use_container_width=True
     )
 
-# TAB 7: GESTIÓN DE AUSPICIADORES
+# TAB 8: GESTIÓN DE AUSPICIADORES
 with tab_admin_ausp:
     st.subheader("🤝 Gestión de Auspiciadores del Club")
     
     if es_admin:
         col_aus_add, col_aus_del = st.columns(2)
+        
         with col_aus_add:
+            st.markdown("#### ➕ Agregar Nuevo Auspiciador")
             with st.form("form_nuevo_auspiciador", clear_on_submit=True):
-                st.write("#### ➕ Agregar Nuevo Auspiciador")
                 aus_nombre = st.text_input("Nombre de la Empresa / Marca:")
                 aus_rubro = st.text_input("Rubro / Tipo de Apoyo:")
                 aus_contacto = st.text_input("Contacto / Detalle:")
+                btn_add_ausp = st.form_submit_button("Guardar Auspiciador")
                 
-                if st.form_submit_button("Guardar Auspiciador"):
+                if btn_add_ausp:
                     if aus_nombre.strip():
                         agregar_auspiciador(aus_nombre, aus_rubro, aus_contacto)
-                        st.success(f"Auspiciador '{aus_nombre}' agregado con éxito.")
+                        st.toast(f"Auspiciador '{aus_nombre}' agregado con éxito.", icon="🎉")
                         st.rerun()
                     else:
                         st.error("Ingresa el nombre del auspiciador.")
 
         with col_aus_del:
+            st.markdown("#### ❌ Eliminar Auspiciador")
             df_ausp_actual = obtener_auspiciadores()
             if not df_ausp_actual.empty:
-                with st.form("form_eliminar_auspiciador"):
-                    st.write("#### ❌ Eliminar Auspiciador")
-                    aus_eliminar = st.selectbox("Seleccionar Auspiciador a Eliminar:", df_ausp_actual["nombre"].tolist())
-                    if st.form_submit_button("Eliminar Auspiciador"):
-                        aus_id = df_ausp_actual[df_ausp_actual["nombre"] == aus_eliminar]["id"].values[0]
-                        eliminar_auspiciador(aus_id)
-                        st.success(f"Auspiciador '{aus_eliminar}' eliminado.")
-                        st.rerun()
+                aus_eliminar_nombre = st.selectbox("Seleccionar Auspiciador a Eliminar:", df_ausp_actual["nombre"].tolist(), key="select_del_ausp")
+                if st.button("🗑️ Eliminar Auspiciador Seleccionado", key="btn_del_ausp"):
+                    aus_id = int(df_ausp_actual[df_ausp_actual["nombre"] == aus_eliminar_nombre]["id"].values[0])
+                    eliminar_auspiciador(aus_id)
+                    st.toast(f"Auspiciador '{aus_eliminar_nombre}' eliminado.", icon="🗑️")
+                    st.rerun()
+            else:
+                st.info("No hay auspiciadores para eliminar.")
 
     df_ausp = obtener_auspiciadores()
     if not df_ausp.empty:
@@ -755,7 +929,7 @@ df_ausp_footer = obtener_auspiciadores()
 
 sponsors_html = '<div class="footer-sponsors">'
 sponsors_html += '<h3>🤝 NUESTROS AUSPICIADORES Y PATROCINADORES</h3>'
-sponsors_html += '<p>Agradecemos el constante apoyo al Club Deportivo Atlético Centurión</p>'
+sponsors_html += '<p>Gracias por ser parte de este Club Deportivo Atlético Centurión</p>'
 sponsors_html += '<div style="margin-top: 15px;">'
 
 if not df_ausp_footer.empty:
