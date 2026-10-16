@@ -40,7 +40,7 @@ def get_dataframe(sheet_name, columns):
     if os.path.exists(filename):
         try:
             df = pd.read_csv(filename)
-            if df.empty:
+            if df.empty or list(df.columns) != list(columns):
                 return pd.DataFrame(columns=columns)
             return df
         except Exception:
@@ -76,7 +76,7 @@ def guardar_config(clave, valor):
 
 cfg = obtener_config()
 
-# Estilos CSS Avanzados
+# Estilos CSS
 st.markdown(f"""
     <style>
     .stApp {{ background-color: {cfg.get("bg_color", "#F8FAFC")}; }}
@@ -105,7 +105,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. GESTIÓN DE USUARIOS Y ROLES
+# 2. GESTIÓN DE USUARIOS Y ROLES (BLINDADO)
 # ==========================================
 def obtener_usuarios():
     df = get_dataframe("usuarios_club", ["username", "password", "nombre_completo", "rol"])
@@ -113,7 +113,7 @@ def obtener_usuarios():
 
 def registrar_usuario(username, password, nombre_completo, rol):
     df = get_dataframe("usuarios_club", ["username", "password", "nombre_completo", "rol"])
-    if not df.empty and username in df["username"].values:
+    if not df.empty and "username" in df.columns and username in df["username"].values:
         return False, "El nombre de usuario ya existe."
     nuevo = pd.DataFrame([[username, password, nombre_completo, rol]], columns=["username", "password", "nombre_completo", "rol"])
     df = pd.concat([df, nuevo], ignore_index=True)
@@ -372,14 +372,17 @@ if st.session_state["usuario_actual"] is None:
             u_input = st.text_input("Usuario")
             p_input = st.text_input("Contraseña", type="password")
             if st.form_submit_button("Entrar"):
-                user_row = df_all_users[(df_all_users["username"] == u_input) & (df_all_users["password"] == p_input)]
-                if not user_row.empty:
-                    st.session_state["usuario_actual"] = user_row.iloc[0]["nombre_completo"]
-                    st.session_state["rol_actual"] = user_row.iloc[0]["rol"]
-                    st.toast("¡Bienvenido al sistema!", icon="⚽")
-                    st.rerun()
+                if not df_all_users.empty and "username" in df_all_users.columns:
+                    user_row = df_all_users[(df_all_users["username"] == u_input) & (df_all_users["password"] == p_input)]
+                    if not user_row.empty:
+                        st.session_state["usuario_actual"] = user_row.iloc[0]["nombre_completo"]
+                        st.session_state["rol_actual"] = user_row.iloc[0]["rol"]
+                        st.toast("¡Bienvenido al sistema!", icon="⚽")
+                        st.rerun()
+                    else:
+                        st.sidebar.error("Usuario o contraseña incorrectos.")
                 else:
-                    st.sidebar.error("Usuario o contraseña incorrectos.")
+                    st.sidebar.error("Error al leer la base de datos de usuarios.")
     else:
         st.session_state["usuario_actual"] = "Invitado"
         st.session_state["rol_actual"] = "Público"
