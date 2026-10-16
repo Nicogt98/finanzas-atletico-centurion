@@ -11,13 +11,17 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 # ==========================================
-# 1. CONFIGURACIÓN DE PÁGINA Y BASE DE DATOS
+# 1. CONFIGURACIÓN DE PÁGINA Y ESTADO DE SESIÓN
 # ==========================================
 st.set_page_config(
     page_title="Atlético Centurión - Finanzas",
     page_icon="⚽",
     layout="wide"
 )
+
+# Inicializar memoria de sesión para el administrador
+if "es_admin" not in st.session_state:
+    st.session_state["es_admin"] = False
 
 # Estilos CSS Personalizados
 st.markdown("""
@@ -222,6 +226,13 @@ def agregar_jugador(nombre, dorsal, categoria):
     conn.commit()
     conn.close()
 
+def eliminar_jugador(jugador_id):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("UPDATE jugadores SET activo = 0 WHERE id = ?", (jugador_id,))
+    conn.commit()
+    conn.close()
+
 def registrar_pago_cuota(jugador_id, nombre_jugador, mes, anio, monto, fecha_pago):
     conn = get_connection()
     c = conn.cursor()
@@ -347,7 +358,7 @@ def generar_pdf_informe(mes_nombre, anio, ingresos_tot, egresos_tot, saldo_actua
     story.append(met_table)
     story.append(Spacer(1, 12))
     
-    # 2. Estado de Cuotas (Pagados vs Deudores)
+    # 2. Estado de Cuotas
     story.append(Paragraph(f"2. Estado de Cuotas de Jugadores — {mes_nombre} {anio}", h2_style))
     total_jug = len(df_estado) if df_estado is not None else 0
     pagados_cnt = len(df_estado[df_estado['estado'] == 'PAGADO']) if df_estado is not None and not df_estado.empty else 0
@@ -395,7 +406,7 @@ def generar_pdf_informe(mes_nombre, anio, ingresos_tot, egresos_tot, saldo_actua
         
     story.append(Spacer(1, 12))
     
-    # 3. Detalle de Egresos y Compras
+    # 3. Detalle de Egresos
     story.append(Paragraph("3. Historial de Gastos y Compras del Club", h2_style))
     if df_mov is not None and not df_mov.empty:
         df_egr = df_mov[df_mov['subtipo'] == 'Egreso']
@@ -463,19 +474,33 @@ with col_header2:
         </div>
     """, unsafe_allow_html=True)
 
-# Menú Lateral - Autenticación
+# ==========================================
+# GESTIÓN DE SESIÓN EN SIDEBAR (PERSISTENTE)
+# ==========================================
 st.sidebar.header("🔐 Acceso al Sistema")
-rol = st.sidebar.radio("Modalidad de Vista:", ["👁️ Transparencia Pública (Ver Datos)", "🔑 Administración (Registrar Pagos)"])
 
-es_admin = False
-if rol == "🔑 Administración (Registrar Pagos)":
-    usuario = st.sidebar.text_input("Usuario")
-    clave = st.sidebar.text_input("Contraseña", type="password")
-    if usuario == "admin" and clave == "centurion2026":
-        st.sidebar.success("Acceso Concedido como Administrador")
-        es_admin = True
-    else:
-        st.sidebar.warning("Ingresa credenciales para registrar movimientos.")
+if not st.session_state["es_admin"]:
+    rol = st.sidebar.radio("Modalidad de Vista:", ["👁️ Transparencia Pública (Ver Datos)", "🔑 Administración"])
+    if rol == "🔑 Administración":
+        with st.sidebar.form("form_login"):
+            usuario = st.text_input("Usuario")
+            clave = st.text_input("Contraseña", type="password")
+            btn_login = st.form_submit_button("Ingresar")
+            
+            if btn_login:
+                if usuario == "admin" and clave == "centurion2026":
+                    st.session_state["es_admin"] = True
+                    st.sidebar.success("Acceso Concedido")
+                    st.rerun()
+                else:
+                    st.sidebar.error("Usuario o contraseña incorrectos.")
+else:
+    st.sidebar.success("🟢 Sesión de Administrador Activa")
+    if st.sidebar.button("🚪 Cerrar Sesión"):
+        st.session_state["es_admin"] = False
+        st.rerun()
+
+es_admin = st.session_state["es_admin"]
 
 if es_admin:
     st.sidebar.divider()
@@ -484,14 +509,14 @@ if es_admin:
     if logo_upload is not None:
         with open("logo_centurion.png", "wb") as f:
             f.write(logo_upload.getbuffer())
-        st.sidebar.success("¡Logo actualizado con éxito!")
+        st.sidebar.success("¡Logo actualizado!")
         st.rerun()
 
 ingresos_tot, egresos_tot, saldo_actual = calcular_resumen()
 st.sidebar.divider()
 st.sidebar.metric(label="💰 SALDO TOTAL DISPONIBLE", value=f"${saldo_actual:,.0f}".replace(",", "."))
 
-# Pestañas
+# Pestañas Principales
 tab_cartola, tab_cuotas, tab_arbitros, tab_compras, tab_jugadores, tab_pdf, tab_admin_ausp = st.tabs([
     "📜 Cartola Bancaria", 
     "👟 Cuotas Mensuales", 
@@ -609,19 +634,36 @@ with tab_compras:
 with tab_jugadores:
     st.subheader("👥 Plantel de Jugadores")
     if es_admin:
-        with st.expander("➕ Inscribir Nuevo Jugador", expanded=True):
-            col_p1, col_p2, col_p3 = st.columns(3)
-            nom_jugador = col_p1.text_input("Nombre Completo:")
-            dorsal_jugador = col_p2.text_input("Dorsal o RUT:")
-            cat_jugador = col_p3.selectbox("Categoría:", ["Adulto / Serie Honor", "Seniors", "Super Seniors", "Juvenil", "Femenino"])
-            if st.button("Guardar Jugador"):
-                if nom_jugador.strip():
-                    agregar_jugador(nom_jugador, dorsal_jugador, cat_jugador)
-                    st.success(f"Jugador '{nom_jugador}' inscrito.")
-                    st.rerun()
+        col_j_add, col_j_del = st.columns(2)
+        with col_j_add:
+            with st.form("form_nuevo_jugador", clear_on_submit=True):
+                st.write("#### ➕ Inscribir Nuevo Jugador")
+                nom_jugador = st.text_input("Nombre Completo:")
+                dorsal_jugador = st.text_input("Dorsal o RUT:")
+                cat_jugador = st.selectbox("Categoría:", ["Adulto / Serie Honor", "Seniors", "Super Seniors", "Juvenil", "Femenino"])
+                
+                if st.form_submit_button("Guardar Jugador"):
+                    if nom_jugador.strip():
+                        agregar_jugador(nom_jugador, dorsal_jugador, cat_jugador)
+                        st.success(f"Jugador '{nom_jugador}' inscrito exitosamente.")
+                        st.rerun()
+                    else:
+                        st.error("Debes ingresar al menos el nombre del jugador.")
+
+        with col_j_del:
+            df_plantel_actual = obtener_jugadores()
+            if not df_plantel_actual.empty:
+                with st.form("form_eliminar_jugador"):
+                    st.write("#### ❌ Eliminar / Dar de Baja Jugador")
+                    jugador_del = st.selectbox("Seleccionar Jugador a Eliminar:", df_plantel_actual["nombre"].tolist())
+                    if st.form_submit_button("Eliminar Jugador Seleccionado"):
+                        jug_id = df_plantel_actual[df_plantel_actual["nombre"] == jugador_del]["id"].values[0]
+                        eliminar_jugador(jug_id)
+                        st.success(f"Jugador '{jugador_del}' dado de baja.")
+                        st.rerun()
 
     df_plantel = obtener_jugadores()
-    st.write(f"**Total Jugadores Inscritos:** {len(df_plantel)}")
+    st.write(f"**Total Jugadores Activos:** {len(df_plantel)}")
     if not df_plantel.empty:
         st.dataframe(df_plantel[["nombre", "dorsal_o_rut", "categoria"]], use_container_width=True)
 
@@ -668,33 +710,42 @@ with tab_pdf:
         use_container_width=True
     )
 
-# TAB 7: GESTIÓN DE AUSPICIADORES (ADMIN)
+# TAB 7: GESTIÓN DE AUSPICIADORES
 with tab_admin_ausp:
     st.subheader("🤝 Gestión de Auspiciadores del Club")
     
     if es_admin:
-        with st.expander("➕ Agregar Nuevo Auspiciador", expanded=True):
-            c_a1, c_a2, c_a3 = st.columns(3)
-            aus_nombre = c_a1.text_input("Nombre de la Empresa / Marca:")
-            aus_rubro = c_a2.text_input("Rubro / Tipo de Apoyo:")
-            aus_contacto = c_a3.text_input("Contacto / Detalle:")
-            
-            if st.button("Guardar Auspiciador"):
-                if aus_nombre.strip():
-                    agregar_auspiciador(aus_nombre, aus_rubro, aus_contacto)
-                    st.success(f"Auspiciador '{aus_nombre}' agregado con éxito.")
-                    st.rerun()
+        col_aus_add, col_aus_del = st.columns(2)
+        with col_aus_add:
+            with st.form("form_nuevo_auspiciador", clear_on_submit=True):
+                st.write("#### ➕ Agregar Nuevo Auspiciador")
+                aus_nombre = st.text_input("Nombre de la Empresa / Marca:")
+                aus_rubro = st.text_input("Rubro / Tipo de Apoyo:")
+                aus_contacto = st.text_input("Contacto / Detalle:")
+                
+                if st.form_submit_button("Guardar Auspiciador"):
+                    if aus_nombre.strip():
+                        agregar_auspiciador(aus_nombre, aus_rubro, aus_contacto)
+                        st.success(f"Auspiciador '{aus_nombre}' agregado con éxito.")
+                        st.rerun()
+                    else:
+                        st.error("Ingresa el nombre del auspiciador.")
+
+        with col_aus_del:
+            df_ausp_actual = obtener_auspiciadores()
+            if not df_ausp_actual.empty:
+                with st.form("form_eliminar_auspiciador"):
+                    st.write("#### ❌ Eliminar Auspiciador")
+                    aus_eliminar = st.selectbox("Seleccionar Auspiciador a Eliminar:", df_ausp_actual["nombre"].tolist())
+                    if st.form_submit_button("Eliminar Auspiciador"):
+                        aus_id = df_ausp_actual[df_ausp_actual["nombre"] == aus_eliminar]["id"].values[0]
+                        eliminar_auspiciador(aus_id)
+                        st.success(f"Auspiciador '{aus_eliminar}' eliminado.")
+                        st.rerun()
 
     df_ausp = obtener_auspiciadores()
     if not df_ausp.empty:
         st.dataframe(df_ausp[["nombre", "rubro", "contacto"]], use_container_width=True)
-        if es_admin:
-            aus_eliminar = st.selectbox("Eliminar Auspiciador:", df_ausp["nombre"].tolist())
-            if st.button("❌ Eliminar Auspiciador Seleccionado"):
-                aus_id = df_ausp[df_ausp["nombre"] == aus_eliminar]["id"].values[0]
-                eliminar_auspiciador(aus_id)
-                st.success("Auspiciador eliminado.")
-                st.rerun()
 
 # ==========================================
 # 4. FOOTER INFERIOR - AUSPICIADORES
