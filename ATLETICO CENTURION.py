@@ -19,6 +19,7 @@ st.set_page_config(
     layout="wide"
 )
 
+# Inicializar sesión de administrador de forma segura
 if "es_admin" not in st.session_state:
     st.session_state["es_admin"] = False
 
@@ -51,7 +52,6 @@ def save_dataframe(sheet_name, df):
     filename = DB_FILES.get(sheet_name, f"{sheet_name}.csv")
     df.to_csv(filename, index=False)
 
-# Configuración de apariencia guardada
 def obtener_config():
     df = get_dataframe("configuracion", ["clave", "valor"])
     config = {
@@ -59,9 +59,9 @@ def obtener_config():
         "logo_b64": "",
         "banner_titulo": "CLUB DEPORTIVO ATLÉTICO CENTURIÓN"
     }
-    if not df.empty:
+    if not df.empty and "clave" in df.columns:
         for _, r in df.iterrows():
-            config[r["clave"]] = r["valor"]
+            config[str(r["clave"])] = str(r["valor"])
     return config
 
 def guardar_config(clave, valor):
@@ -74,7 +74,7 @@ def guardar_config(clave, valor):
 
 cfg = obtener_config()
 
-# Estilos CSS Dinámicos con personalización de fondo
+# Estilos CSS Dinámicos
 st.markdown(f"""
     <style>
     .stApp {{ background-color: {cfg.get("bg_color", "#F8FAFC")}; }}
@@ -84,20 +84,20 @@ st.markdown(f"""
         text-align: center; margin-bottom: 25px;
         box-shadow: 0 4px 15px rgba(0, 43, 73, 0.25);
         border-bottom: 4px solid #00A3E0;
-    }
+    
     .header-centurion h1 {{ color: #FFFFFF !important; font-weight: 800; font-size: 2.2rem; margin: 0; }}
     .header-centurion p {{ color: #E2E8F0; margin-top: 6px; font-size: 1.05rem; margin-bottom: 0; }}
     .stButton>button {{
         background-color: #002B49 !important; color: #FFFFFF !important;
         border-radius: 8px !important; font-weight: 600 !important;
-    }
+    
     div[data-testid="stMetricValue"] {{ color: #002B49 !important; font-weight: 700; }}
     .stTabs [data-baseweb="tab"] {{ background-color: #E2E8F0; border-radius: 8px 8px 0 0; padding: 8px 16px; color: #002B49; font-weight: 600; }}
     .stTabs [aria-selected="true"] {{ background-color: #002B49 !important; color: #FFFFFF !important; }}
     .footer-sponsors {{ background-color: #002B49; color: white; padding: 30px; border-radius: 16px; margin-top: 50px; text-align: center; border-top: 4px solid #00A3E0; }}
     .sponsor-badge {{ background-color: #FFFFFF; color: #002B49; padding: 12px 20px; border-radius: 10px; font-weight: 700; display: inline-block; margin: 8px; border: 2px solid #E2E8F0; }}
     .sponsor-badge span {{ display: block; font-size: 0.8rem; color: #64748B; font-weight: 400; }}
-    .comment-box {{ background-color: #F1F5F9; border-radius: 8px; padding: 10px 15px; margin-top: 8px; border-left: 3px solid #002B49; }}
+    .comment-box {{ background-color: #F1F5F9; border-radius: 8px; padding: 10px 15px; margin-top: 8px; border-left: 3px solid #002B49; color: #1E293B; }}
     </style>
 """, unsafe_allow_html=True)
 
@@ -324,7 +324,7 @@ def generar_pdf_informe(mes_nombre, anio, ingresos_tot, egresos_tot, saldo_actua
 col_header1, col_header2 = st.columns([1, 5])
 with col_header1:
     logo_b64 = cfg.get("logo_b64", "")
-    if logo_b64:
+    if logo_b64 and logo_b64.strip() != "":
         try:
             st.image(base64.b64decode(logo_b64), width=120)
         except Exception:
@@ -361,7 +361,7 @@ ingresos_tot, egresos_tot, saldo_actual = calcular_resumen()
 st.sidebar.divider()
 st.sidebar.metric(label="💰 SALDO TOTAL DISPONIBLE", value=f"${saldo_actual:,.0f}".replace(",", "."))
 
-# Pestañas Principales (incluyendo Personalización Web)
+# Pestañas Principales Dinámicas
 tabs_list = [
     "📰 Noticias", "📜 Cartola", "👟 Cuotas", "🏁 Árbitros", 
     "🛒 Compras", "👥 Plantel", "📄 PDF", "🤝 Auspiciadores"
