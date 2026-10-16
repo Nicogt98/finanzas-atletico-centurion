@@ -76,7 +76,7 @@ def guardar_config(clave, valor):
 
 cfg = obtener_config()
 
-# Estilos CSS con llaves duplicadas para evitar errores f-string
+# Estilos CSS Avanzados
 st.markdown(f"""
     <style>
     .stApp {{ background-color: {cfg.get("bg_color", "#F8FAFC")}; }}
@@ -126,7 +126,7 @@ if df_users_init.empty:
     registrar_usuario("dirigente", "dirigente2026", "Dirigente de Turno", "Administrador")
 
 # ==========================================
-# 3. FUNCIONES DE NEGOCIO Y DATOS BLINDADAS
+# 3. FUNCIONES DE NEGOCIO Y DATOS
 # ==========================================
 def obtener_jugadores():
     df = get_dataframe("jugadores", ["id", "nombre", "dorsal_o_rut", "categoria", "activo", "foto_b64", "username"])
@@ -362,4 +362,330 @@ with col_header2:
     titulo_banner = cfg.get("banner_titulo", "CLUB DEPORTIVO ATLÉTICO CENTURIÓN")
     st.markdown(f'<div class="header-centurion"><h1>{titulo_banner}</h1><p>🔵⚪ Comunidad Interactiva & Control Financiero ⚪🔵</p></div>', unsafe_allow_html=True)
 
-st.sidebar.header
+st.sidebar.markdown("### 🔐 Acceso al Sistema")
+df_all_users = obtener_usuarios()
+
+if st.session_state["usuario_actual"] is None:
+    tipo_login = st.sidebar.radio("Ingresar como:", ["🔑 Iniciar Sesión", "👁️ Modo Público / Invitado"])
+    if tipo_login == "🔑 Iniciar Sesión":
+        with st.sidebar.form("form_login_general"):
+            u_input = st.text_input("Usuario")
+            p_input = st.text_input("Contraseña", type="password")
+            if st.form_submit_button("Entrar"):
+                user_row = df_all_users[(df_all_users["username"] == u_input) & (df_all_users["password"] == p_input)]
+                if not user_row.empty:
+                    st.session_state["usuario_actual"] = user_row.iloc[0]["nombre_completo"]
+                    st.session_state["rol_actual"] = user_row.iloc[0]["rol"]
+                    st.toast("¡Bienvenido al sistema!", icon="⚽")
+                    st.rerun()
+                else:
+                    st.sidebar.error("Usuario o contraseña incorrectos.")
+    else:
+        st.session_state["usuario_actual"] = "Invitado"
+        st.session_state["rol_actual"] = "Público"
+else:
+    st.sidebar.success(f"👤 Conectado: **{st.session_state['usuario_actual']}**")
+    st.sidebar.info(f"🏷️ Rol: **{st.session_state['rol_actual']}**")
+    if st.sidebar.button("🚪 Cerrar Sesión"):
+        st.session_state["usuario_actual"] = None
+        st.session_state["rol_actual"] = None
+        st.rerun()
+
+rol = st.session_state["rol_actual"]
+es_maestro = (rol == "Maestro")
+es_admin = (rol in ["Maestro", "Administrador"])
+es_jugador_o_mas = (rol in ["Maestro", "Administrador", "Jugador"])
+
+ingresos_tot, egresos_tot, saldo_actual = calcular_resumen()
+st.sidebar.divider()
+st.sidebar.metric(label="💰 SALDO TOTAL DISPONIBLE", value=f"${saldo_actual:,.0f}".replace(",", "."))
+
+tabs_list = ["📰 Muro Social", "📜 Cartola", "👟 Cuotas", "👥 Plantel", "📄 PDF", "🤝 Auspiciadores"]
+if es_admin:
+    tabs_list.extend(["🏁 Árbitros", "🛒 Compras"])
+if es_maestro:
+    tabs_list.append("🎨 Personalizar Web")
+
+tabs = st.tabs(tabs_list)
+
+tab_idx = 0
+tab_muro = tabs[tab_idx]; tab_idx += 1
+tab_cartola = tabs[tab_idx]; tab_idx += 1
+tab_cuotas = tabs[tab_idx]; tab_idx += 1
+tab_plantel = tabs[tab_idx]; tab_idx += 1
+tab_pdf = tabs[tab_idx]; tab_idx += 1
+tab_ausp = tabs[tab_idx]; tab_idx += 1
+
+if es_admin:
+    tab_arbitros = tabs[tab_idx]; tab_idx += 1
+    tab_compras = tabs[tab_idx]; tab_idx += 1
+if es_maestro:
+    tab_config = tabs[tab_idx]; tab_idx += 1
+
+# TAB 1: MURO SOCIAL
+with tab_muro:
+    st.subheader("📰 Muro Social y Novedades del Club")
+    if rol != "Público" and rol is not None:
+        with st.container():
+            st.markdown("##### ✍️ ¿Qué está pasando en el club hoy?")
+            with st.form("form_crear_publicacion", clear_on_submit=True):
+                tit_post = st.text_input("Título de la publicación:")
+                foto_post = st.file_uploader("Adjuntar foto o imagen:", type=["jpg", "jpeg", "png"])
+                cont_post = st.text_area("Escribe tu mensaje para la comunidad...")
+                if st.form_submit_button("📢 Publicar en el Muro"):
+                    if tit_post.strip() and cont_post.strip():
+                        b_img_post = foto_post.getvalue() if foto_post is not None else None
+                        agregar_noticia(tit_post, cont_post, b_img_post, st.session_state["usuario_actual"])
+                        st.toast("¡Publicado con éxito!", icon="🎉")
+                        st.rerun()
+                    else:
+                        st.error("Debes ingresar un título y contenido.")
+    else:
+        st.info("💡 Inicia sesión para publicar en el muro y comentar con la comunidad.")
+
+    st.divider()
+    df_n = obtener_noticias()
+    if not df_n.empty:
+        for _, n in df_n.iterrows():
+            nid = int(n['id'])
+            st.markdown(f"""
+                <div class="post-card">
+                    <h3>⚽ {n['titulo']}</h3>
+                    <p style="color: #64748B; font-size: 0.85rem;">📅 {n['fecha']} | Publicado por: <b>{n['autor']}</b></p>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            if pd.notnull(n['imagen_b64']) and str(n['imagen_b64']).strip() != "":
+                try:
+                    st.image(base64.b64decode(n['imagen_b64']), use_container_width=True)
+                except Exception:
+                    pass
+            
+            st.write(n['contenido'])
+            
+            if es_maestro or (rol != "Público" and n['autor'] == st.session_state["usuario_actual"]):
+                if st.button(f"🗑️ Eliminar Publicación #{nid}", key=f"del_post_{nid}"):
+                    eliminar_noticia(nid)
+                    st.rerun()
+            
+            st.markdown("##### 💬 Comentarios")
+            df_c = obtener_comentarios(nid)
+            if not df_c.empty:
+                for _, c in df_c.iterrows():
+                    st.markdown(f'<div class="comment-box"><b>👤 {c["nombre_autor"]}</b> <small style="color:#64748B;">({c["fecha"]})</small><br><span>{c["comentario"]}</span></div>', unsafe_allow_html=True)
+            else:
+                st.write("*(Sin comentarios aún)*")
+            
+            if rol != "Público" and rol is not None:
+                with st.form(key=f"form_com_post_{nid}", clear_on_submit=True):
+                    txt_com = st.text_input("Escribe un comentario...", key=f"txt_c_{nid}")
+                    if st.form_submit_button("💬 Comentar"):
+                        if txt_com.strip():
+                            agregar_comentario(nid, st.session_state["usuario_actual"], txt_com)
+                            st.rerun()
+            st.markdown("---")
+    else:
+        st.info("No hay publicaciones en el muro todavía.")
+
+# TAB 2: CARTOLA
+with tab_cartola:
+    st.subheader("📜 Cartola Bancaria y Transparencia")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Ingresos Totales", f"${ingresos_tot:,.0f}".replace(",", "."))
+    c2.metric("Egresos Totales", f"${egresos_tot:,.0f}".replace(",", "."))
+    c3.metric("Saldo Líquido", f"${saldo_actual:,.0f}".replace(",", "."))
+    st.divider()
+    df_m = obtener_movimientos()
+    if not df_m.empty:
+        df_disp = df_m.copy()
+        df_disp["Monto ($)"] = df_disp.apply(lambda r: f"+ ${float(r['monto']):,.0f}".replace(",", ".") if r['subtipo'] == 'Ingreso' else f"- ${float(r['monto']):,.0f}".replace(",", "."), axis=1)
+        st.dataframe(df_disp[['fecha', 'tipo', 'subtipo', 'Monto ($)', 'detalle', 'responsable']], use_container_width=True)
+    else:
+        st.info("No hay movimientos registrados.")
+
+# TAB 3: CUOTAS
+with tab_cuotas:
+    st.subheader("👟 Control de Cuotas Mensuales y Transacciones")
+    cm, ca = st.columns(2)
+    m_dict = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
+    ms = cm.selectbox("Mes:", list(m_dict.keys()), format_func=lambda x: m_dict[x], index=datetime.now().month - 1)
+    ans = ca.number_input("Año:", min_value=2024, max_value=2030, value=datetime.now().year)
+    
+    if es_admin:
+        with st.expander("➕ Registrar Pago de Cuota y N° de Transacción"):
+            df_j = obtener_jugadores()
+            if not df_j.empty:
+                j1, j2, j3, j4 = st.columns(4)
+                jsel = j1.selectbox("Jugador:", df_j["nombre"].tolist())
+                monto_c = j2.number_input("Monto:", min_value=1000, value=5000, step=1000)
+                f_c = j3.date_input("Fecha Pago:", datetime.now())
+                nro_tx = j4.text_input("N° de Transacción / Boleta:", placeholder="Ej: TX-984125")
+                
+                if st.button("💰 Registrar Pago con Transacción"):
+                    jid = int(df_j[df_j["nombre"] == jsel]["id"].values[0])
+                    ex, msg = registrar_pago_cuota(jid, jsel, ms, ans, monto_c, f_c, nro_tx)
+                    if ex:
+                        st.toast(msg, icon="✅")
+                        st.rerun()
+                    else:
+                        st.error(msg)
+    
+    df_est = obtener_estado_cuotas(ms, ans)
+    if not df_est.empty:
+        df_est["Estado Visual"] = df_est["estado"].apply(lambda x: "✅ PAGADO" if x == "PAGADO" else "❌ PENDIENTE")
+        st.dataframe(df_est[["nombre", "categoria", "Estado Visual", "nro_transaccion", "fecha_pago", "monto"]], use_container_width=True)
+
+# TAB 4: PLANTEL
+with tab_plantel:
+    st.subheader("👥 Plantel de Jugadores y Usuarios del Club")
+    if es_admin:
+        j_add, j_del = st.columns(2)
+        with j_add:
+            st.markdown("#### ➕ Inscribir Jugador y Crear Usuario")
+            with st.form("fnj_user", clear_on_submit=True):
+                nom_j = st.text_input("Nombre Completo:")
+                dor_j = st.text_input("Dorsal o RUT:")
+                cat_j = st.selectbox("Categoría:", ["Adulto / Serie Honor", "Seniors", "Super Seniors", "Juvenil", "Femenino"])
+                fot_j = st.file_uploader("Foto de Perfil:", type=["jpg", "jpeg", "png"])
+                
+                st.markdown("---")
+                st.markdown("##### 🔑 Credenciales de Acceso (Manual sin correo)")
+                crear_usr = st.checkbox("Crear cuenta de usuario para este jugador")
+                u_user = st.text_input("Nombre de Usuario (Login):")
+                u_pass = st.text_input("Contraseña de Acceso:", type="password")
+                
+                if st.form_submit_button("Guardar Jugador y Usuario"):
+                    if nom_j.strip():
+                        b_foto = fot_j.getvalue() if fot_j is not None else None
+                        usr_final = u_user if crear_usr else ""
+                        pass_final = u_pass if crear_usr else ""
+                        agregar_jugador(nom_j, dor_j, cat_j, b_foto, usr_final, pass_final)
+                        st.toast("Jugador y cuenta creados con éxito.", icon="🎉")
+                        st.rerun()
+        with j_del:
+            st.markdown("#### ❌ Dar de Baja Jugador")
+            df_p_act = obtener_jugadores()
+            if not df_p_act.empty:
+                jsel_del = st.selectbox("Seleccionar Jugador:", df_p_act["nombre"].tolist())
+                if st.button("🗑️ Eliminar Jugador"):
+                    jid = int(df_p_act[df_p_act["nombre"] == jsel_del]["id"].values[0])
+                    eliminar_jugador(jid)
+                    st.rerun()
+
+    df_p = obtener_jugadores()
+    st.write(f"**Total Jugadores Activos:** {len(df_p)}")
+    if not df_p.empty:
+        for _, jp in df_p.iterrows():
+            cols = st.columns([1, 4])
+            with cols[0]:
+                if pd.notnull(jp['foto_b64']) and str(jp['foto_b64']).strip() != "":
+                    try:
+                        st.image(base64.b64decode(jp['foto_b64']), width=80)
+                    except Exception:
+                        st.markdown("⚽")
+                else:
+                    st.markdown("⚽ *Sin foto*")
+            with cols[1]:
+                usr_tag = f" | 👤 User: `{jp['username']}`" if pd.notnull(jp['username']) and str(jp['username']).strip() != "" else ""
+                st.markdown(f"**{jp['nombre']}** — *Dorsal:* {jp['dorsal_o_rut']} — *Cat:* {jp['categoria']}{usr_tag}")
+            st.divider()
+
+# TAB 5: PDF
+with tab_pdf:
+    st.subheader("📄 Generación de Informe PDF con Transacciones")
+    pm, pa = st.columns(2)
+    mpdf = pm.selectbox("Mes PDF:", list(m_dict.keys()), format_func=lambda x: m_dict[x], index=datetime.now().month - 1)
+    apdf = pa.number_input("Año PDF:", min_value=2024, max_value=2030, value=datetime.now().year)
+    
+    df_ep = obtener_estado_cuotas(mpdf, apdf)
+    ing_p, egr_p, sal_p = calcular_resumen()
+    
+    pdf_b = generar_pdf_informe(m_dict[mpdf], apdf, ing_p, egr_p, sal_p, df_ep, obtener_movimientos())
+    st.download_button("📥 Descargar Informe en PDF", data=pdf_b, file_name=f"Informe_{m_dict[mpdf]}_{apdf}.pdf", mime="application/pdf", use_container_width=True)
+
+# TAB 6: AUSPICIADORES
+with tab_ausp:
+    st.subheader("🤝 Auspiciadores del Club")
+    if es_admin:
+        with st.form("fausp", clear_on_submit=True):
+            an = st.text_input("Empresa:")
+            ar = st.text_input("Rubro:")
+            ac = st.text_input("Contacto:")
+            if st.form_submit_button("Guardar"):
+                if an.strip():
+                    agregar_auspiciador(an, ar, ac)
+                    st.rerun()
+    df_a = obtener_auspiciadores()
+    if not df_a.empty:
+        st.dataframe(df_a, use_container_width=True)
+
+# TAB 7: ÁRBITROS
+if es_admin:
+    with tab_arbitros:
+        st.subheader("🏁 Pago a Árbitros")
+        with st.form("fa", clear_on_submit=True):
+            a1, a2 = st.columns(2)
+            marb = a1.number_input("Monto ($):", min_value=1000, value=25000, step=1000)
+            farb = a2.date_input("Fecha:", datetime.now())
+            riv = st.text_input("Rival / Partido:")
+            det = st.text_input("Detalle:")
+            if st.form_submit_button("🚨 Registrar Egreso Árbitro"):
+                concepto = f"Arbitraje: {riv} ({det})" if det else f"Arbitraje: {riv}"
+                registrar_egreso("Pago Árbitros", marb, farb, concepto, "Tesorería")
+                st.toast("Registrado.", icon="⚽")
+                st.rerun()
+        df_ma = obtener_movimientos()
+        if not df_ma.empty:
+            df_arb = df_ma[df_ma["tipo"] == "Pago Árbitros"]
+            if not df_arb.empty:
+                st.dataframe(df_arb[['fecha', 'monto', 'detalle', 'responsable']], use_container_width=True)
+
+# TAB 8: COMPRAS
+if es_admin:
+    with tab_compras:
+        st.subheader("🛒 Compras del Club")
+        with st.form("fc", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            mcomp = c1.number_input("Monto ($):", min_value=1000, value=15000, step=1000)
+            fcomp = c2.date_input("Fecha:", datetime.now())
+            ccomp = st.text_input("Concepto / Inversión:")
+            bol = st.text_input("N° Boleta:")
+            if st.form_submit_button("🛒 Registrar Compra"):
+                d_comp = f"Compra: {ccomp} [{bol}]" if bol else f"Compra: {ccomp}"
+                registrar_egreso("Compra Club", mcomp, fcomp, d_comp, "Tesorería")
+                st.toast("Compra registrada.", icon="🛒")
+                st.rerun()
+        if not df_m.empty:
+            df_comp = df_m[df_m["tipo"] == "Compra Club"]
+            if not df_comp.empty:
+                st.dataframe(df_comp[['fecha', 'monto', 'detalle', 'responsable']], use_container_width=True)
+
+# TAB 9: PERSONALIZAR WEB
+if es_maestro:
+    with tab_config:
+        st.subheader("🎨 Personalización y Apariencia de la Web")
+        with st.form("form_config"):
+            nuevo_titulo = st.text_input("Título del Banner Principal:", value=cfg.get("banner_titulo", "CLUB DEPORTIVO ATLÉTICO CENTURIÓN"))
+            color_fondo = st.color_picker("Color de Fondo de la Página:", value=cfg.get("bg_color", "#F8FAFC"))
+            nuevo_logo = st.file_uploader("Subir Escudo / Logo Oficial (.png, .jpg):", type=["jpg", "jpeg", "png"])
+            
+            if st.form_submit_button("💾 Guardar Cambios de Apariencia"):
+                guardar_config("banner_titulo", nuevo_titulo)
+                guardar_config("bg_color", color_fondo)
+                if nuevo_logo is not None:
+                    l_bytes = nuevo_logo.getvalue()
+                    guardar_config("logo_b64", base64.b64encode(l_bytes).decode('utf-8'))
+                st.toast("¡Apariencia actualizada con éxito!", icon="🎨")
+                st.rerun()
+
+# FOOTER
+st.markdown("---")
+df_af = obtener_auspiciadores()
+s_html = '<div class="footer-sponsors"><h3>🤝 NUESTROS AUSPICIADORES</h3><div style="margin-top: 15px;">'
+if not df_af.empty:
+    for _, row in df_af.iterrows():
+        s_html += f'<div class="sponsor-badge">⭐ {row["nombre"]} <span>{row["rubro"]}</span></div>'
+else:
+    s_html += '<div class="sponsor-badge">Espacio Disponible <span>Sé nuestro auspiciador</span></div>'
+s_html += '</div></div>'
+st.markdown(s_html, unsafe_allow_html=True)
